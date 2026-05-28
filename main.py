@@ -356,18 +356,23 @@ class TextBlockWidget(QWidget):
         self._fixed_width = 0  # 0 表示自动宽度
 
         self._dragging = False
-        self._resize_mode = None  # None, 'left', 'right', 'top', 'bottom', 'tl', 'tr', 'bl', 'br'
+        self._resize_mode = None
         self._drag_start = QPoint()
         self._drag_start_geometry = None
         self._editing = False
         self._selected = False
+        self._canvas_scale = 1.0
+        self._logical_x = float(x)
+        self._logical_y = float(y)
+        self._logical_width = 120
+        self._logical_height = 80
 
         # 为每个字符生成唯一的随机种子
         self._char_seeds = {}
         self._update_char_seeds()
 
-        self.move(x, y)
         self._update_size()
+        self._apply_logical_pos()
         self.setMouseTracking(True)
         self.setCursor(Qt.CursorShape.SizeAllCursor)
 
@@ -673,10 +678,15 @@ class TextBlockWidget(QWidget):
         # 确保最小尺寸
         min_width = 120
         min_height = 80
-        self.setFixedSize(max(min_width, size.width() + margin), max(min_height, size.height() + margin))
+        self._logical_width = max(min_width, size.width() + margin)
+        self._logical_height = max(min_height, size.height() + margin)
+        self.setFixedSize(
+            max(1, int(round(self._logical_width * self._canvas_scale))),
+            max(1, int(round(self._logical_height * self._canvas_scale)))
+        )
 
     def _get_transform(self):
-        center = QPointF(self.width() / 2, self.height() / 2)
+        center = QPointF(self._logical_width / 2, self._logical_height / 2)
         transform = QTransform()
         transform.translate(center.x(), center.y())
 
@@ -697,6 +707,26 @@ class TextBlockWidget(QWidget):
         transform.scale(self._scale_x, self._scale_y)
         transform.translate(-center.x(), -center.y())
         return transform
+
+    def _to_logical_point(self, pos):
+        return QPointF(pos.x() / self._canvas_scale, pos.y() / self._canvas_scale)
+
+    def set_canvas_scale(self, scale):
+        self._canvas_scale = max(0.1, min(3.0, scale))
+        self._update_size()
+        self._apply_logical_pos()
+        self.update()
+
+    def set_logical_pos(self, x, y):
+        self._logical_x = float(x)
+        self._logical_y = float(y)
+        self._apply_logical_pos()
+
+    def _apply_logical_pos(self):
+        self.move(
+            int(round(self._logical_x * self._canvas_scale)),
+            int(round(self._logical_y * self._canvas_scale))
+        )
 
     def _draw_scribble_effect(self, painter, char_x, char_y, char_width, char_height, char_index):
         """绘制涂改效果 - 像写错字涂黑一样"""
@@ -847,9 +877,13 @@ class TextBlockWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        painter.scale(self._canvas_scale, self._canvas_scale)
+        self._paint_content(painter, include_selection=True)
+        painter.end()
 
+    def _paint_content(self, painter, include_selection=False):
         transform = self._get_transform()
-        painter.setTransform(transform)
+        painter.setTransform(transform, True)
 
         font = self._get_font()
         painter.setFont(font)
@@ -915,7 +949,7 @@ class TextBlockWidget(QWidget):
                 char_global_index += 1
 
         # 绘制选中边框
-        if self._selected:
+        if include_selection and self._selected:
             text_rect = self._calculate_text_rect()
             m = self.BORDER_MARGIN
             border_rect = QRectF(m, m, text_rect.width(), text_rect.height())
@@ -948,10 +982,9 @@ class TextBlockWidget(QWidget):
             for _, mid in mid_points:
                 painter.drawRect(QRectF(mid.x() - cs/2, mid.y() - cs/2, cs, cs))
 
-        painter.end()
-
     def _get_resize_mode(self, pos):
         """根据鼠标位置判断调整大小的模式"""
+        pos = self._to_logical_point(pos)
         text_rect = self._calculate_text_rect()
         m = self.BORDER_MARGIN
         border_rect = QRectF(m, m, text_rect.width(), text_rect.height())
@@ -986,8 +1019,13 @@ class TextBlockWidget(QWidget):
 
             if resize_mode and self._selected:
                 self._resize_mode = resize_mode
-                self._drag_start = event.pos()
-                self._drag_start_geometry = (self.x(), self.y(), self.width(), self.height())
+                self._drag_start = self._to_logical_point(event.pos())
+                self._drag_start_geometry = (
+                    self._logical_x,
+                    self._logical_y,
+                    self._logical_width,
+                    self._logical_height
+                )
             else:
                 self._dragging = True
                 self._drag_start = event.pos()
@@ -996,8 +1034,9 @@ class TextBlockWidget(QWidget):
     def mouseMoveEvent(self, event: QMouseEvent):
         if self._resize_mode and self._drag_start_geometry:
             # 调整大小
-            dx = event.pos().x() - self._drag_start.x()
-            dy = event.pos().y() - self._drag_start.y()
+            current_pos = self._to_logical_point(event.pos())
+            dx = current_pos.x() - self._drag_start.x()
+            dy = current_pos.y() - self._drag_start.y()
             sx, sy, sw, sh = self._drag_start_geometry
 
             new_x, new_y, new_w, new_h = sx, sy, sw, sh
@@ -1014,13 +1053,16 @@ class TextBlockWidget(QWidget):
                 new_y = sy + sh - new_h
 
             self._fixed_width = new_w
-            self.move(new_x, new_y)
+            self.set_logical_pos(new_x, new_y)
             self._update_size()
             self.position_changed.emit()
         elif self._dragging and not self._editing:
             # 拖动移动
             new_pos = self.mapToParent(event.pos() - self._drag_start)
-            self.move(new_pos)
+            self.set_logical_pos(
+                new_pos.x() / self._canvas_scale,
+                new_pos.y() / self._canvas_scale
+            )
             self.position_changed.emit()
 
         # 更新光标样式
@@ -1102,8 +1144,8 @@ class TextBlockWidget(QWidget):
             'char_spacing_max': self._char_spacing_max,
             'extra_space_count': self._extra_space_count,
             'fixed_width': self._fixed_width,
-            'x': self.x(),
-            'y': self.y()
+            'x': self._logical_x,
+            'y': self._logical_y
         }
 
     def set_properties(self, props):
@@ -1154,15 +1196,16 @@ class TextBlockWidget(QWidget):
         if 'fixed_width' in props:
             self._fixed_width = props['fixed_width']
         if 'x' in props and 'y' in props:
-            self.move(props['x'], props['y'])
+            self.set_logical_pos(float(props['x']), float(props['y']))
 
         self._update_char_seeds()
         self._update_size()
+        self._apply_logical_pos()
         self.update()
 
 
 class CanvasWidget(QWidget):
-    """画布控件"""
+    """画布控件 - 以背景原始尺寸为逻辑坐标，按按钮倍数缩放显示"""
 
     text_block_selected = pyqtSignal(object)
 
@@ -1172,12 +1215,8 @@ class CanvasWidget(QWidget):
         self._text_blocks = []
         self._selected_block = None
         self._scale = 1.0
-        self._offset = QPoint(0, 0)
-        self._panning = False
-        self._pan_start = QPoint()
 
         self.setAcceptDrops(True)
-        self.setMinimumSize(800, 600)
         self._update_size()
 
     def set_background(self, pixmap):
@@ -1185,17 +1224,31 @@ class CanvasWidget(QWidget):
         self._update_size()
         self.update()
 
-    def _update_size(self):
+    def _logical_size(self):
+        """返回未缩放的画布尺寸，优先使用背景原始尺寸。"""
         if self._background:
-            w = int(self._background.width() * self._scale)
-            h = int(self._background.height() * self._scale)
-            self.setFixedSize(max(800, w), max(600, h))
-        else:
-            self.setFixedSize(800, 600)
+            return self._background.size()
+        return QSize(800, 600)
+
+    def _update_size(self):
+        size = self._logical_size()
+        self.setFixedSize(
+            max(1, int(round(size.width() * self._scale))),
+            max(1, int(round(size.height() * self._scale)))
+        )
+
+    def set_scale(self, new_scale):
+        """设置画布缩放，只影响屏幕显示，不改变导出的逻辑坐标。"""
+        self._scale = max(0.1, min(3.0, new_scale))
+        self._update_size()
+        for block in self._text_blocks:
+            block.set_canvas_scale(self._scale)
+        self.update()
 
     def add_text_block(self, block):
         self._text_blocks.append(block)
         block.setParent(self)
+        block.set_canvas_scale(self._scale)
         block.selected.connect(self._on_block_selected)
         block.position_changed.connect(self.update)
         block.show()
@@ -1231,45 +1284,19 @@ class CanvasWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-        painter.scale(self._scale, self._scale)
-
         if self._background:
-            painter.drawPixmap(0, 0, self._background)
+            painter.drawPixmap(self.rect(), self._background)
         else:
-            painter.fillRect(QRectF(0, 0, self.width() / self._scale, self.height() / self._scale),
-                             QColor(240, 240, 240))
+            painter.fillRect(self.rect(), QColor(240, 240, 240))
             painter.setPen(QColor(180, 180, 180))
             painter.setFont(QFont("Microsoft YaHei", 14))
-            painter.drawText(QRectF(0, 0, self.width() / self._scale, self.height() / self._scale),
-                             Qt.AlignmentFlag.AlignCenter,
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                              tr("drag_drop_hint"))
 
         painter.end()
 
     def wheelEvent(self, event: QWheelEvent):
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            delta = event.angleDelta().y()
-            old_scale = self._scale
-            if delta > 0:
-                self._scale = min(3.0, self._scale * 1.1)
-            else:
-                self._scale = max(0.1, self._scale / 1.1)
-
-            scale_ratio = self._scale / old_scale
-            mouse_pos = event.position()
-            for block in self._text_blocks:
-                block_pos = QPointF(block.pos())
-                rel_x = block_pos.x() - mouse_pos.x()
-                rel_y = block_pos.y() - mouse_pos.y()
-                new_x = mouse_pos.x() + rel_x * scale_ratio
-                new_y = mouse_pos.y() + rel_y * scale_ratio
-                block.move(int(new_x), int(new_y))
-
-            self._update_size()
-            self.update()
-            event.accept()
-        else:
-            super().wheelEvent(event)
+        event.ignore()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -1289,11 +1316,7 @@ class CanvasWidget(QWidget):
                     break
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = True
-            self._pan_start = event.pos()
-            self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        elif event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
             clicked_on_block = False
             for block in reversed(self._text_blocks):
                 if block.geometry().contains(event.pos()):
@@ -1301,20 +1324,6 @@ class CanvasWidget(QWidget):
                     break
             if not clicked_on_block:
                 self._select_block(None)
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if self._panning:
-            delta = event.pos() - self._pan_start
-            self._offset += delta
-            self._pan_start = event.pos()
-            for block in self._text_blocks:
-                block.move(block.pos() + delta)
-            self.update()
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.MiddleButton:
-            self._panning = False
-            self.setCursor(Qt.CursorShape.ArrowCursor)
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Delete and self._selected_block:
@@ -1331,9 +1340,10 @@ class PropertyPanel(QWidget):
     add_block_requested = pyqtSignal()
     delete_block_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, available_fonts=None, parent=None):
         super().__init__(parent)
         self._current_block = None
+        self._available_fonts = available_fonts or []
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1584,14 +1594,17 @@ class PropertyPanel(QWidget):
         self._set_enabled(False)
 
     def _load_fonts(self):
-        self.font_combo.addItem("Ma Shan Zheng")
-        self.font_combo.addItem("Zhi Mang Xing")
-        self.font_combo.addItem("Liu Jian Mao Cao")
-        self.font_combo.addItem("Long Cang")
-        self.font_combo.addItem("ZCOOL KuaiLe")
-        self.font_combo.addItem("ZCOOL QingKe HuangYou")
-        self.font_combo.addItem("ZCOOL XiaoWei")
-        self.font_combo.addItem("Caveat Brush")
+        fonts = self._available_fonts or [
+            "Ma Shan Zheng",
+            "Zhi Mang Xing",
+            "Liu Jian Mao Cao",
+            "Long Cang",
+            "ZCOOL KuaiLe",
+            "ZCOOL QingKe HuangYou",
+            "ZCOOL XiaoWei",
+            "Caveat Brush",
+        ]
+        self.font_combo.addItems(fonts)
 
     def set_block(self, block):
         self._current_block = block
@@ -1650,8 +1663,8 @@ class PropertyPanel(QWidget):
         self.rotation_spin.setValue(block.rotation)
         self.scale_x_spin.setValue(block.scale_x)
         self.scale_y_spin.setValue(block.scale_y)
-        self.pos_x_label.setText(str(block.x()))
-        self.pos_y_label.setText(str(block.y()))
+        self.pos_x_label.setText(str(int(round(block._logical_x))))
+        self.pos_y_label.setText(str(int(round(block._logical_y))))
 
     def _on_font_changed(self, font_family):
         if self._current_block:
@@ -1805,20 +1818,29 @@ class MainWindow(QMainWindow):
             icon.addPixmap(pixmap)
             self.setWindowIcon(icon)
 
+        self._load_custom_fonts()
+        self._zoom_levels = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0]
+        self._zoom_index = self._zoom_levels.index(1.0)
         self._setup_ui()
         self._setup_menu()
         self._setup_toolbar()
         self._setup_statusbar()
 
-        self._load_custom_fonts()
-
     def _load_custom_fonts(self):
+        """加载目录下所有字体，返回可用的字体族名列表"""
+        self._available_fonts = []
         if FONT_DIR.exists():
-            for font_file in FONT_DIR.glob("*.ttf"):
+            font_files = [
+                path for path in sorted(FONT_DIR.iterdir())
+                if path.is_file() and path.suffix.lower() in (".ttf", ".otf", ".ttc")
+            ]
+            for font_file in font_files:
                 font_id = QFontDatabase.addApplicationFont(str(font_file))
                 if font_id >= 0:
                     families = QFontDatabase.applicationFontFamilies(font_id)
-                    print(f"已加载字体: {families}")
+                    for f in families:
+                        if f not in self._available_fonts:
+                            self._available_fonts.append(f)
 
     def _setup_ui(self):
         central_widget = QWidget()
@@ -1827,14 +1849,14 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
 
         scroll_area = QScrollArea()
-        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidgetResizable(False)
 
         self.canvas = CanvasWidget()
         self.canvas.text_block_selected.connect(self._on_block_selected)
         scroll_area.setWidget(self.canvas)
         splitter.addWidget(scroll_area)
 
-        self.property_panel = PropertyPanel()
+        self.property_panel = PropertyPanel(self._available_fonts)
         self.property_panel.property_changed.connect(self._on_property_changed)
         self.property_panel.add_block_requested.connect(self._add_text_block)
         self.property_panel.delete_block_requested.connect(self._delete_selected)
@@ -1897,17 +1919,17 @@ class MainWindow(QMainWindow):
 
         self.zoom_in_action = QAction(tr("zoom_in"), self)
         self.zoom_in_action.setShortcut("Ctrl++")
-        self.zoom_in_action.triggered.connect(lambda: self._zoom(1.2))
+        self.zoom_in_action.triggered.connect(self._zoom_in)
         self.view_menu.addAction(self.zoom_in_action)
 
         self.zoom_out_action = QAction(tr("zoom_out"), self)
         self.zoom_out_action.setShortcut("Ctrl+-")
-        self.zoom_out_action.triggered.connect(lambda: self._zoom(0.8))
+        self.zoom_out_action.triggered.connect(self._zoom_out)
         self.view_menu.addAction(self.zoom_out_action)
 
         self.reset_zoom_action = QAction(tr("reset_zoom"), self)
         self.reset_zoom_action.setShortcut("Ctrl+0")
-        self.reset_zoom_action.triggered.connect(lambda: self._zoom(1.0, absolute=True))
+        self.reset_zoom_action.triggered.connect(self._reset_zoom)
         self.view_menu.addAction(self.reset_zoom_action)
 
         # 语言菜单
@@ -1931,18 +1953,24 @@ class MainWindow(QMainWindow):
 
         self.toolbar.addSeparator()
 
-        self.zoom_label_text = QLabel(tr("toolbar_zoom"))
-        self.toolbar.addWidget(self.zoom_label_text)
-
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(10, 300)
-        self.zoom_slider.setValue(100)
-        self.zoom_slider.setFixedWidth(150)
-        self.zoom_slider.valueChanged.connect(self._on_zoom_slider_changed)
-        self.toolbar.addWidget(self.zoom_slider)
+        self.zoom_out_btn = QPushButton("-")
+        self.zoom_out_btn.setToolTip(tr("zoom_out"))
+        self.zoom_out_btn.clicked.connect(self._zoom_out)
+        self.toolbar.addWidget(self.zoom_out_btn)
 
         self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(48)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.toolbar.addWidget(self.zoom_label)
+
+        self.zoom_in_btn = QPushButton("+")
+        self.zoom_in_btn.setToolTip(tr("zoom_in"))
+        self.zoom_in_btn.clicked.connect(self._zoom_in)
+        self.toolbar.addWidget(self.zoom_in_btn)
+
+        self.reset_zoom_btn = QPushButton(tr("reset_zoom"))
+        self.reset_zoom_btn.clicked.connect(self._reset_zoom)
+        self.toolbar.addWidget(self.reset_zoom_btn)
 
     def _setup_statusbar(self):
         self.statusbar = QStatusBar()
@@ -1987,7 +2015,9 @@ class MainWindow(QMainWindow):
 
         # 更新工具栏
         self.add_btn.setText(tr("add_text_block"))
-        self.zoom_label_text.setText(tr("toolbar_zoom"))
+        self.zoom_out_btn.setToolTip(tr("zoom_out"))
+        self.zoom_in_btn.setToolTip(tr("zoom_in"))
+        self.reset_zoom_btn.setText(tr("reset_zoom"))
 
         # 更新状态栏
         self.statusbar.showMessage(tr("ready"))
@@ -1995,11 +2025,24 @@ class MainWindow(QMainWindow):
     def _on_property_changed(self):
         self.canvas.update()
 
-    def _on_zoom_slider_changed(self, value):
-        self.canvas._scale = value / 100.0
-        self.canvas._update_size()
-        self.canvas.update()
-        self.zoom_label.setText(f"{value}%")
+    def _apply_zoom(self):
+        scale = self._zoom_levels[self._zoom_index]
+        self.canvas.set_scale(scale)
+        self.zoom_label.setText(f"{int(scale * 100)}%")
+
+    def _zoom_in(self):
+        if self._zoom_index < len(self._zoom_levels) - 1:
+            self._zoom_index += 1
+            self._apply_zoom()
+
+    def _zoom_out(self):
+        if self._zoom_index > 0:
+            self._zoom_index -= 1
+            self._apply_zoom()
+
+    def _reset_zoom(self):
+        self._zoom_index = self._zoom_levels.index(1.0)
+        self._apply_zoom()
 
     def _open_background(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -2059,86 +2102,55 @@ class MainWindow(QMainWindow):
             "PNG (*.png);;JPEG (*.jpg);;All Files (*)"
         )
         if file_path:
-            pixmap = QPixmap(self.canvas.size())
+            # 取消选中状态
+            selected = self.canvas.get_selected_block()
+            if selected:
+                selected.set_selected(False)
+
+            # 导出始终使用逻辑尺寸：有背景时为原图尺寸，无背景时为默认画布尺寸。
+            if self.canvas._background:
+                bg = self.canvas._background
+                export_w = bg.width()
+                export_h = bg.height()
+            else:
+                logical_size = self.canvas._logical_size()
+                export_w = logical_size.width()
+                export_h = logical_size.height()
+
+            pixmap = QPixmap(export_w, export_h)
             pixmap.fill(Qt.GlobalColor.white)
 
             painter = QPainter(pixmap)
             painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
-            painter.scale(self.canvas._scale, self.canvas._scale)
-
+            # 绘制背景
             if self.canvas._background:
                 painter.drawPixmap(0, 0, self.canvas._background)
 
+            # 绘制文字块
             for block in self.canvas.get_all_blocks():
-                was_selected = block._selected
-                block.set_selected(False)
-
                 painter.save()
-                painter.translate(block.pos())
-
-                transform = block._get_transform()
-                painter.setTransform(transform, True)
-
-                font = block._get_font()
-                painter.setFont(font)
-                painter.setPen(block.color)
-
-                lines = block.text.split('\n')
-                if not lines:
-                    lines = ['']
-
-                fm = painter.fontMetrics()
-                y = 20
-                char_global_index = 0
-
-                for line_idx, line in enumerate(lines):
-                    if line_idx > 0:
-                        y += int(fm.height() * block.line_spacing)
-                    else:
-                        y += fm.ascent()
-
-                    x = 20
-                    for char_idx, char in enumerate(line):
-                        need_scribble = False
-                        if block.scribble_ratio > 0 and char not in ' \t':
-                            seed = block._char_seeds.get(char_global_index, 0)
-                            rng = random.Random(seed + 12345)
-                            need_scribble = rng.random() * 100 < block.scribble_ratio
-
-                        char_rect = fm.boundingRect(char)
-                        char_width = char_rect.width()
-                        char_height = fm.height()
-
-                        if need_scribble:
-                            block._draw_scribble_effect(painter, x, y - fm.ascent(),
-                                                        char_width, char_height, char_global_index)
-                            painter.setPen(block.color)
-                            painter.setFont(font)
-                            block._draw_jittered_char(painter, char, x, y,
-                                                      char_global_index, fm)
-                        else:
-                            block._draw_jittered_char(painter, char, x, y,
-                                                      char_global_index, fm)
-
-                        x += char_rect.width()
-                        char_global_index += 1
-
+                painter.translate(block._logical_x, block._logical_y)
+                block._paint_content(painter, include_selection=False)
                 painter.restore()
 
-                if was_selected:
-                    block.set_selected(True)
-
             painter.end()
-
             pixmap.save(file_path)
+
+            # 恢复选中状态
+            if selected:
+                selected.set_selected(True)
+
             self.statusbar.showMessage(f"{tr('image_exported')}: {file_path}")
 
     def _add_text_block(self):
+        x = 100 + len(self.canvas.get_all_blocks()) * 20
+        y = 100 + len(self.canvas.get_all_blocks()) * 20
         block = TextBlockWidget(
             text="双击编辑" if current_lang == "zh" else "Double-click to edit",
-            x=100 + len(self.canvas.get_all_blocks()) * 20,
-            y=100 + len(self.canvas.get_all_blocks()) * 20
+            x=x, y=y
         )
         # 设置默认宽度为背景图片宽度的50%，如果没有背景则使用屏幕宽度的40%
         if self.canvas._background:
@@ -2156,17 +2168,6 @@ class MainWindow(QMainWindow):
             self.canvas.remove_text_block(block)
             self.property_panel.set_block(None)
             self.statusbar.showMessage(tr("deleted_block"))
-
-    def _zoom(self, factor, absolute=False):
-        if absolute:
-            self.canvas._scale = factor
-        else:
-            self.canvas._scale *= factor
-        self.canvas._scale = max(0.1, min(3.0, self.canvas._scale))
-        self.canvas._update_size()
-        self.canvas.update()
-        self.zoom_slider.setValue(int(self.canvas._scale * 100))
-        self.zoom_label.setText(f"{int(self.canvas._scale * 100)}%")
 
 
 def main():
