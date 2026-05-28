@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/mashanzheng/MaShanZheng-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/zhimangxing/ZhiMangXing-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/liujianmaocao/LiuJianMaoCao-Regular.ttf\")",
+      "Bash(python -c \"import PyQt6; print\\('PyQt6 version:', PyQt6.QtCore.PYQT_VERSION_STR\\)\")",
+      "Bash(python -c \"from PyQt6.QtCore import PYQT_VERSION_STR; print\\('PyQt6 version:', PYQT_VERSION_STR\\)\")",
+      "Bash(timeout 5 python main.py)",
+      "Bash(timeout 3 python main.py)",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/zcoolkuaile/ZCOOLKuaiLe-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/zcoolqingkehuangyou/ZCOOLQingKeHuangYou-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/longcang/LongCang-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/zcoolxiaowei/ZCOOLXiaoWei-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/xiangjiaoyuan/XiangJiaoYuan-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/canvaiconscustomfont/CanvaIconsCustomFont%5Bwght%5D.ttf\")",
+      "Bash(rm \"D:\\\\usercode\\\\self\\\\handinpaper\\\\fonts\\\\CanvaIconsCustomFont[wght].ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/shizimishangxianti/ShiZiMiShangXianTi-1.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/caveatbrush/CaveatBrush-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/handwriting/Handwriting-Regular.ttf\")",
+      "Bash(curl -L -O \"https://github.com/google/fonts/raw/main/ofl/kaiti/KaiTi-Regular.ttf\")",
+      "Bash(grep -E \"\\\\.ttf$\")",
+      "Bash(curl -L -O \"https://github.com/ArtInLine/fonts/raw/master/ChineseFonts/%E6%96%87%E9%B8%9F%E6%89%8B%E5%86%99%E4%BD%93-WenNiaoShouXieTi.ttf\")",
+      "Bash(rm \"D:\\\\usercode\\\\self\\\\handinpaper\\\\fonts\\\\文鸟手写体-WenNiaoShouXieTi.ttf\")",
+      "Bash(curl -L -O \"https://raw.githubusercontent.com/ArtInLine/fonts/master/ChineseFonts/SmileySans-Oblique.ttf\")",
+      "Bash(python -c \"from PyQt6.QtSvg import QSvgRenderer; print\\('QtSvg OK'\\)\")"
+    ]
+  }
+}
